@@ -1,46 +1,115 @@
-const puppeteer = require('puppeteer');
-const fs = require('fs');
-const readline = require('readline');
+const puppeteer = require("puppeteer");
+const fs = require("fs");
+const readline = require("readline");
+require("dotenv").config();
+
+function delay(time) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, time);
+  });
+}
 
 (async () => {
   // Launch Puppeteer
-  const browser = await puppeteer.launch({ headless: true }); // Use headless: false for debugging
+  const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
 
-  // Function to scrape usernames
+  async function loginToTwitter() {
+    await page.goto("https://x.com/login");
+    await page.waitForSelector('input[name="text"]');
+    await page.type('input[name="text"]', process.env.USERNAME);
+    await delay(1000); // aaaaaa
+    await page.evaluate(() => {
+      const nextButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.innerText.includes("Next")
+      );
+      if (nextButton) {
+        nextButton.click();
+      }
+    });
+
+    await page.waitForSelector('input[name="password"]', { visible: true });
+    await page.type('input[name="password"]', process.env.PASSWORD);
+    await delay(1000); // aaaAAAA
+
+    await page.evaluate(() => {
+      const loginButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.innerText.includes("Log in")
+      );
+      if (loginButton) {
+        loginButton.click();
+      }
+    });
+
+    await page.waitForNavigation({ waitUntil: "networkidle2" });
+  }
+
+  // fetch likes
   async function scrapeLikes(tweetLink) {
     try {
-      await page.goto(tweetLink);
+      const urlParts = tweetLink.split("/");
+      const tweetAuthor = "@" + urlParts[3];
 
-      // Wait for the tweet to load
-      await page.waitForSelector('article div[data-testid="like"]', { timeout: 5000 });
+      const likesLink = tweetLink + "/likes";
+      await page.goto(likesLink, { waitUntil: "networkidle2" });
 
-      // Click on the likes button to open the list of likes
-      await page.click('article div[data-testid="like"]');
-      await page.waitForSelector('div[aria-label="Liked by"]', { timeout: 5000 });
+      let usernames = new Set();
+      usernames.add(tweetAuthor); // Add tweet author to the usernames set
 
-      // Scrape usernames from the list
-      const usernames = await page.evaluate(() => {
-        let usernames = [];
-        let elements = document.querySelectorAll('div[aria-label="Liked by"] div[dir="ltr"] > span');
-        elements.forEach(element => {
-          usernames.push(element.innerText);
+      // dumb
+      for (let i = 0; i < 35; i++) {
+        let newNames = await page.evaluate(() => {
+          let names = [];
+          let elements = document.querySelectorAll(
+            'button[data-testid="UserCell"] a[role="link"] span'
+          );
+          elements.forEach((element) => {
+            if (element.innerText.startsWith("@")) {
+              names.push(element.innerText);
+            }
+          });
+          return names;
         });
-        return usernames;
-      });
 
-      return usernames;
+        newNames.forEach((name) => usernames.add(name));
+
+        const initialUserCellCount = await page.evaluate(
+          () =>
+            document.querySelectorAll('button[data-testid="UserCell"]').length
+        );
+
+        await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+        await delay(2000);
+
+        const newUserCellCount = await page.evaluate(
+          () =>
+            document.querySelectorAll('button[data-testid="UserCell"]').length
+        );
+
+        if (newUserCellCount <= initialUserCellCount) {
+          break;
+        }
+      }
+
+      const uniqueUsernames = Array.from(usernames);
+      console.log(
+        `Found ${uniqueUsernames.length} usernames for tweet: ${tweetLink}`
+      );
+
+      return uniqueUsernames;
     } catch (error) {
       console.error(`Error scraping ${tweetLink}:`, error.message);
       return null;
     }
   }
 
+  await loginToTwitter();
+
   // Read tweet links from tweets.txt
-  const fileStream = fs.createReadStream('tweets.txt');
+  const fileStream = fs.createReadStream("tweets.txt");
   const rl = readline.createInterface({
     input: fileStream,
-    crlfDelay: Infinity
+    crlfDelay: Infinity,
   });
 
   let allUsernames = [];
@@ -57,9 +126,11 @@ const readline = require('readline');
   }
 
   // Write usernames to usernames.txt
-  fs.writeFileSync('usernames.txt', allUsernames.join('\n'));
+  fs.writeFileSync("../twitterblocker/usernames.txt", allUsernames.join("\n"));
 
-  console.log('Usernames of people who liked the tweets have been written to usernames.txt');
+  console.log(
+    "Usernames of people who liked the tweets have been written to usernames.txt"
+  );
 
   await browser.close();
 })();
